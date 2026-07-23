@@ -75,8 +75,7 @@ class Dataset():
             )
             print(f"Created new dataset, repo: {repo_name}")
 
-    def collect(self, observation_queue):
-        task = obs["observation/task"]
+    def collect(self, observation_queue, task):
         self.task = task
         prev_obs = None
         frames_recorded = 0
@@ -84,6 +83,7 @@ class Dataset():
         while not observation_queue.empty():
             
             obs = observation_queue.get()
+            
 
             if prev_obs is not None:
                 prev_obs["actions"] = obs["actions"]

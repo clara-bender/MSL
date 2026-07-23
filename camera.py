@@ -4,7 +4,7 @@ import cv2
 import mediapipe as mp
 
 class Camera():
-    def __init__(self,serial,width,height,fps):
+    def __init__(self,serial,width=640,height=480,fps=60):
         self.serial = serial
         self.width = width
         self.height = height
