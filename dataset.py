@@ -84,7 +84,6 @@ class Dataset():
             
             obs = observation_queue.get()
             
-
             if prev_obs is not None:
                 prev_obs["actions"] = obs["actions"]
                 self.my_dataset.add_frame(prev_obs)
@@ -92,9 +91,13 @@ class Dataset():
 
             prev_obs = obs
 
+        if frames_recorded == 0:
+            return 0
+
         self.my_dataset.save_episode()
         return frames_recorded
 
+    @staticmethod
     def decode_img(x):
         if isinstance(x, dict):
             x = x.get("bytes", None)
@@ -108,6 +111,7 @@ class Dataset():
 
         return img
 
+    @staticmethod
     def fix_vec(x, dim=None):
         if isinstance(x, dict):
             x = x.get("array", x.get("value", x))
