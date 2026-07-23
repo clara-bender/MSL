@@ -3,6 +3,7 @@ from lerobot.common.constants import HF_LEROBOT_HOME
 import numpy as np
 from pathlib import Path
 import shutil
+import cv2
 
 class Dataset():
     def __init__(self, repo_name, fps_collect=20, img_height=240, img_width=320, robot_dof=7, robot_type="xarm"):
@@ -29,13 +30,13 @@ class Dataset():
             # confirm exact structure of ds.meta.tasks before relying on this:
             self.task = list(ds.meta.tasks.values())
 
-            self.dataset = ds
+            self.my_dataset = ds
             
             print(f"Loaded existing dataset, repo: {repo_name}")
         else:
             if dataset_path.exists():
                 shutil.rmtree(dataset_path)
-            self.dataset = LeRobotDataset.create(
+            self.my_dataset = LeRobotDataset.create(
                 repo_id=repo_name,
                 robot_type=robot_type,
                 fps=fps_collect,
@@ -74,40 +75,46 @@ class Dataset():
             )
             print(f"Created new dataset, repo: {repo_name}")
 
-    def collect(self, observation_queue, task):
-
+    def collect(self, observation_queue):
+        task = obs["observation/task"]
         self.task = task
+        prev_obs = None
+        frames_recorded = 0
 
         while not observation_queue.empty():
+            
             obs = observation_queue.get()
-            tripod_camera = obs["observation/exterior_image_1_left"]
-            extra_camera = obs["observation/exterior_image_2_left"]
-            wrist_camera = obs["observation/wrist_image_left"]
-            gripper_pos = obs["observation/gripper_position"]
-            servo_state = obs["observation/joint_position"]
 
-            total_state = np.concatenate((servo_state,np.array([gripper_pos],dtype=np.float32)))
+            if prev_obs is not None:
+                prev_obs["actions"] = obs["actions"]
+                self.my_dataset.add_frame(prev_obs)
+                frames_recorded += 1
 
-            if self.prev_data is not None:
-                self.dataset.add_frame(
-                    {
-                        "joint_position": self.prev_data["joints"],
-                        "gripper_position": self.prev_data["gripper"],
-                        "actions": total_state,  # This is the "future" state reached
-                        "exterior_image_1_left": self.prev_data["base"],
-                        "exterior_image_2_left": self.prev_data["base2"],
-                        "wrist_image_left": self.prev_data["wrist"],
-                        "task": task,
-                    }
-                )
-                self.frames_recorded += 1
+            prev_obs = obs
 
-            self.prev_data = {
-                "joints": total_state[:self.robot_dof-1],
-                "gripper": total_state[-1:],
-                "wrist": wrist_camera,
-                "base": tripod_camera,
-                "base2": extra_camera,
-            }
+        self.my_dataset.save_episode()
+        return frames_recorded
 
-        self.dataset.save_episode()
+    def decode_img(x):
+        if isinstance(x, dict):
+            x = x.get("bytes", None)
+
+        if x is None:
+            return None
+
+        arr = np.frombuffer(x, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR).copy()
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        return img
+
+    def fix_vec(x, dim=None):
+        if isinstance(x, dict):
+            x = x.get("array", x.get("value", x))
+
+        x = np.array(x, dtype=np.float32)
+
+        if dim is not None:
+            x = x.reshape(dim)
+
+        return x

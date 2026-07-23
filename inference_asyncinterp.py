@@ -107,9 +107,9 @@ def get_observation():
     g_p = np.array((g_p - 850) / -860)
 
     observation = {
-        "observation/exterior_image_1_left": robot_img,
-        "observation/exterior_image_2_left": depth_colormap,
-        "observation/wrist_image_left": hand_img,
+        "observation/exterior_image_1_left": robot_img.copy(),
+        "observation/exterior_image_2_left": depth_colormap.copy(),
+        "observation/wrist_image_left": hand_img.copy(),
         "observation/gripper_position": g_p,
         "observation/joint_position": state,
         "prompt": "Follow the hand",
@@ -201,6 +201,7 @@ def inference_loop():
                 condition_variable.wait()
 
             time_since_last_inference = t
+
             # Remove actions that have already been executed
             action_prev = action_curr[
                 time_since_last_inference:PREDICTION_HORIZON
