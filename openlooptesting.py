@@ -27,7 +27,7 @@ PREDICTION_HORIZON = 20
 print(policy_config.__file__)
 config = _config.get_config("pi05_xarm_finetune")
 checkpoint_dir = download.maybe_download(
-    "/home/admin/research/src/openpi/checkpoints/pi05_xarm_finetune/"+checkpoint
+    "/home/admin/new/src/openpi/checkpoints/pi05_xarm_finetune/"+checkpoint
 )
 policy = policy_config.create_trained_policy(config, checkpoint_dir)
 print(policy._is_pytorch_model)
@@ -37,8 +37,8 @@ print(policy._is_pytorch_model)
 # =========================
 src_dataset = Dataset(SRC_REPO)
 # Rotation and translation matrix (hand xyz pos --> eef xyz pos)
-R = np.loadtxt("/home/admin/research/src/handteleop/R.txt")
-t = np.loadtxt("/home/admin/research/src/handteleop/t.txt")
+R = np.loadtxt("/home/admin/new/src/handteleop/R.txt")
+t = np.loadtxt("/home/admin/new/src/handteleop/t.txt")
 # Compile hand poses
 hand_images = []
 depth_images = []

@@ -10,12 +10,13 @@ from openpi.shared import download
 from openpi.training import config as _config
 
 from camera import Camera
+import warnings
 
 # =========================
 # User inputs
 # =========================
-debug = True
-robot_active = False
+debug = False
+robot_active = True
 FPS = 30.0
 DT = 1.0 / FPS
 CONTROL_HZ = 50.0 # multiple of 10
@@ -32,14 +33,18 @@ buffer_size = 5
 print(f"Debug mode: {debug}")
 print(f"Robot DOF: {ROBOT_DOF}")
 
+
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf.symbol_database")
+
+
 # =========================
 # Policy Setup
 # =========================
 print(policy_config.__file__)
 config = _config.get_config("pi05_xarm_finetune")
-checkpoint = "t_follow_hand_delay_reduced_actions_352/20000"
+checkpoint = "t_handasync_5mmrandgrip/24999"
 checkpoint_dir = download.maybe_download(
-    "/home/admin/openpi/checkpoints/pi05_xarm_finetune/"+checkpoint
+    "/home/admin/new/src/openpi/checkpoints/pi05_xarm_finetune/"+checkpoint
 )
 policy = policy_config.create_trained_policy(config, checkpoint_dir)
 print(policy._is_pytorch_model)
@@ -47,18 +52,28 @@ print(policy._is_pytorch_model)
 # =========================
 # XArm Setup
 # =========================
+robot_x_bounds = [485,160]
+robot_y_bounds = [345,-210]
+robot_z_bounds = [600,160]
+boundary = robot_x_bounds + robot_y_bounds + robot_z_bounds
+
 if not debug:
     arm = XArmAPI('192.168.1.222')
 
-    if arm.get_state() != 0:
+    # Start up robot
+    """Initialize XArm for control with safety limits."""
+    code, state = arm.get_state()
+    if state != 0:
         arm.clean_error()
         time.sleep(0.5)
 
     arm.motion_enable(enable=True)
-    arm.set_mode(1)
+    arm.set_mode(7)
     arm.set_state(0)
     arm.set_gripper_enable(enable=True)
     arm.set_gripper_mode(0)
+    print(boundary)
+    print('XArm initialized with safety limits')
 
 # =========================
 # RealSense Camera Setup
@@ -72,8 +87,11 @@ if not debug:
     time.sleep(3)
     robot_camera = Camera(ROBOT_CAMERA_SERIAL, WIDTH, HEIGHT, FPS)
     time.sleep(3)
+    mpHands, hands, mpDraw = Camera.initialize_hands()
 
-
+# Rotation and translation matrix (hand xyz pos --> eef xyz pos)
+R = np.loadtxt("/home/admin/new/src/handteleop/R.txt")
+trans = np.loadtxt("/home/admin/new/src/handteleop/t.txt")
 # =========================
 # Observation
 # =========================
@@ -107,41 +125,15 @@ def get_observation():
     g_p = np.array((g_p - 850) / -860)
 
     observation = {
-        "observation/exterior_image_1_left": robot_img.copy(),
+        "observation/exterior_image_1_left": np.zeros_like(robot_img.copy()),
         "observation/exterior_image_2_left": depth_colormap.copy(),
         "observation/wrist_image_left": hand_img.copy(),
-        "observation/gripper_position": g_p,
+        "observation/gripper_position": np.random.uniform(0,1),
         "observation/joint_position": state,
         "prompt": "Follow the hand",
     }
 
     return observation
-
-# =========================
-# Command Interpolation
-# =========================
-def interpolate_action(state, goal):
-    delta_increment = (goal - state) / (DT * CONTROL_HZ * 6)
-
-    for i in range(int(DT * CONTROL_HZ)):
-        start_time = time.perf_counter()
-        state += delta_increment
-        command = state.copy()
-
-        # Convert roll and yaw from [0 360] to [-180 180]
-        if ROBOT_DOF == 7:
-            command[3] = (command[3]+ 180) % 360 -180
-            command[5] = (command[5]+ 180) % 360 -180
-
-        # Hard-code roll, pitch, and yaw
-        elif ROBOT_DOF == 4:
-            command = np.concatenate((command, np.array([180, 0, 0])))
-
-        if not debug and robot_active:
-            arm.set_servo_cartesian(command, speed=100, mvacc=1000)
-
-        time_left = (1 / CONTROL_HZ) - (time.perf_counter() - start_time)
-        time.sleep(max(time_left,0))
 
 # =========================
 # Action Getter
@@ -223,6 +215,41 @@ def inference_loop():
         t = t - time_since_last_inference
         Q.append(t)
 
+def get_teleop():
+    pinch_threshold = 0.06
+    hand_img, depth_colormap = hand_camera.get_image(True)
+    hand_results = hands.process(hand_img)
+
+    if hand_results.multi_hand_landmarks and hand_results.multi_hand_world_landmarks:
+        for handLms, worldLms in zip(hand_results.multi_hand_landmarks,
+                                    hand_results.multi_hand_world_landmarks):
+            
+            if ROBOT_DOF == 4:
+                uv_middle_knuckle = hand_camera.to_pixel(handLms.landmark[5]) # middle knuckle (pixel)
+                xyz_cam = hand_camera.convert_2d_to_3d(uv_middle_knuckle)
+                if len(xyz_cam) != 3:
+                    print("not all points detected")
+                    return None
+                xyz_robot = R @ np.array(xyz_cam)*1000 + trans
+
+                # --- world coordinates (meters) ---
+                thumb_w = worldLms.landmark[4]
+                index_w = worldLms.landmark[8]
+                thumb_3d = np.array([thumb_w.x, thumb_w.y, thumb_w.z])
+                index_3d = np.array([index_w.x, index_w.y, index_w.z])
+                d = np.linalg.norm(thumb_3d - index_3d)
+
+                code, grip_curr = arm.get_gripper_position()
+                if d <= pinch_threshold:
+                    grip_cmd = np.max([0, grip_curr-100])
+                else:
+                    grip_cmd = np.min([850, grip_curr+100])
+
+                return np.concatenate((xyz_robot, [grip_cmd]))
+    else:
+        print("No hand detection")
+        return None
+
 
 # =========================
 # Execution Loop
@@ -231,38 +258,29 @@ def execution_loop():
     global t
     
     while True:
-        # print("t:", t)
-        t0 = time.perf_counter()
-
+        t0 = time.time()
         observation = get_observation()
-        command = get_action(observation)
-
-        if not debug:
-            current_pose = arm.get_position()[1]
+        command_inf = get_action(observation)
+        command_teleop = get_teleop()
+        if command_teleop is not None:
+            command = command_teleop
         else:
-            current_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            command = command_inf
+        print(f"command: {command}")
 
-        # Convert roll and yaw from [-180, 180] to [0, 360] for interpolation
-        current_pose[3] = current_pose[3] % 360
-        current_pose[5] = current_pose[5] % 360
+        cmd_gripper = command[-1]*-860 + 850 # unnormalize the gripper action
 
-        # Convert roll, pitch, and yaw from radians to degrees for the robot
-        if ROBOT_DOF == 7:
-            cmd_pose = command[:6].copy()
-            cmd_pose[3:6] = cmd_pose[3:6] / np.pi * 180
-            cmd_gripper = command[6]* -860 + 850 # unnormalize the gripper action
-        elif ROBOT_DOF == 4:
-            cmd_pose = command[:3].copy()
-            cmd_gripper = command[3]* -860 + 850 # unnormalize the gripper action
-            start_pose = np.array(current_pose[0:3], dtype=np.float32)
+        # Hard-code roll, pitch, and yaw
+        if ROBOT_DOF == 4:
+            command = np.concatenate((command[0:3], np.array([np.pi, 0, 0]), [cmd_gripper]))
 
-        # execute smooth motion to target via interpolation
-        interpolate_action(start_pose, cmd_pose)
         if not debug and robot_active:
             arm.set_gripper_position(cmd_gripper)
-
-        time_left = DT - (time.perf_counter() - t0)
-        time.sleep(max(time_left, 0))
+            arm.set_position(x=command[0], y=command[1], z=command[2], roll=command[3],
+                              pitch=command[4],yaw=command[5], is_radian=True, wait=False)
+            
+        time_passed = time.time() - t0
+        print(f"Recording freq: {1/time_passed}")
 
 
 # =========================
