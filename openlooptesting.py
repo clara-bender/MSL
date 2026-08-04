@@ -17,7 +17,7 @@ from dataset import Dataset
 # =========================
 # User Inputs
 # =========================
-checkpoint = "t_handasync_5mmrandgrip/20000"
+checkpoint = "t_handasync_20mm_20chunk_depthcircle/20000"
 SRC_REPO = "clara/handasync"
 PREDICTION_HORIZON = 20
 
@@ -54,6 +54,35 @@ for parquet_path in sorted((HF_LEROBOT_HOME /SRC_REPO /"data"/ "chunk-000").glob
         extra_img = src_dataset.decode_img(df.at[i, "extra_camera"])
 
         xyzgrip = src_dataset.fix_vec(df.at[i, "actions"], src_dataset.robot_dof)
+        z = xyzgrip[2]
+
+        # Map z (depth) -> circle radius, drawn in the corner of hand_img
+        HAND_IMG_SIZE = (320, 240)  # (width, height) after resize
+        Z_CIRCLE_RADIUS_RANGE = (3, 30)  # pixels
+        Z_CIRCLE_COLOR = (255, 0, 0)  # RGB red (resized_hand_img is RGB, not BGR)
+        Z_CIRCLE_MARGIN = 2  # pixels of padding between circle and image edge
+        Z_CIRCLE_THICKNESS = 2  # pixels; outline thickness (hollow circle)
+
+        # Fixed center, inset by the largest possible radius + margin, so the
+        # circle never gets clipped by the image border at any z value.
+        _max_radius = Z_CIRCLE_RADIUS_RANGE[1]
+        Z_CIRCLE_CENTER = (
+            _max_radius + Z_CIRCLE_MARGIN,
+            HAND_IMG_SIZE[1] - _max_radius - Z_CIRCLE_MARGIN,
+        )
+
+        z_values = [xyzgrip[2] for xyzgrip in xyzgrips]
+        z_min, z_max = min(z_values), max(z_values)
+
+        def z_to_radius(z):
+            if z_max == z_min:
+                return Z_CIRCLE_RADIUS_RANGE[0]
+            frac = (z - z_min) / (z_max - z_min)
+            r_min, r_max = Z_CIRCLE_RADIUS_RANGE
+            return int(round(r_min + frac * (r_max - r_min)))
+
+        cv2.circle(hand_img, Z_CIRCLE_CENTER, z_to_radius(z), Z_CIRCLE_COLOR, Z_CIRCLE_THICKNESS)
+
         hand_images.append(hand_img)
         depth_images.append(extra_img)
         xyzgrips.append(xyzgrip)

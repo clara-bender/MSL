@@ -177,8 +177,6 @@ def guided_inference(policy, observation, action_prev, delay, time_since_last_in
         action_prev = np.pad(action_prev, ((0, H - T), (0, 0)), mode='constant')
 
     v_pi = np.array(policy.infer(observation)["actions"])
-    print(f"ACTION SIZE: {v_pi.shape}")
-    print(f"vpi: {v_pi[0, :]}")
     v_pi = v_pi[:H, :]  # ensure correct shape
 
     A = action_prev.copy()
